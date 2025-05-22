@@ -84,7 +84,6 @@ class TrackingService : LifecycleService() {
      * Called when the service is created. Sets up notification builder,
      * initializes LiveData, and observes tracking state.
      */
-    @RequiresApi(Build.VERSION_CODES.Q)
     override fun onCreate() {
         super.onCreate()
         curNotificationBuilder = baseNotificationBuilder
@@ -116,7 +115,8 @@ class TrackingService : LifecycleService() {
                         isFirstRun = false
                     } else {
                         Timber.d("Resuming service...")
-                        startTimer()
+                        isTracking.postValue(true) // Set tracking true BEFORE starting timer logic
+                        startTimerLogic() // Call the refactored timer logic
                     }
                 }
 
@@ -134,40 +134,39 @@ class TrackingService : LifecycleService() {
         return super.onStartCommand(intent, flags, startId)
     }
 
-    private var isTimerEnabled = false
-    private var timeRun = 0L
-    private var lapTime = 0L
-    private var timeStarted = 0L
+    // private var isTimerEnabled = false // Removed
+    internal var timeRun = 0L // Accumulated run time in milliseconds
+    // private var lapTime = 0L // Removed
+    private var timeStarted = 0L // Timestamp when the current segment started
 
 
-    //Starting the service
-    private fun startTimer() {
-        addEmptyPolyline()
-        isTracking.postValue(true)
-        timeStarted = System.currentTimeMillis()
-        isTimerEnabled = true
-        timeRunInMilis.postValue(0)
-        timeRunInseconds.postValue(0)
-        startForegroundService()
+    // Renamed from startTimer and refactored
+    private fun startTimerLogic() {
+        addEmptyPolyline() // Start a new line segment
+        timeStarted = System.currentTimeMillis() // Record start time for this segment
 
-        //Every second we update the timeRunInMilis and timeRunInseconds
         CoroutineScope(Dispatchers.Main).launch {
-            while (isTracking.value!!) {
-                lapTime = System.currentTimeMillis() - timeStarted
-                timeRunInMilis.postValue(timeRun + lapTime)
-                if (timeRunInMilis.value!! >= timeRunInseconds.value!!) {
-                    timeRunInseconds.postValue(timeRunInseconds.value!! + 1)
-                }
+            while (isTracking.value == true) { // Loop while tracking is active
+                val currentLapDuration = System.currentTimeMillis() - timeStarted
+                val totalMillis = timeRun + currentLapDuration // timeRun is previously accumulated time
+                timeRunInMilis.postValue(totalMillis)
+                timeRunInseconds.postValue(totalMillis / 1000L)
                 delay(TIMER_UPDATE_INTERVAL)
             }
-            timeRun += lapTime
+            // The coroutine stops when isTracking.value becomes false
         }
     }
 
 
     private fun pauseService() {
-        isTracking.postValue(false)
-        isTimerEnabled = false
+        isTracking.postValue(false) // Signal that tracking should stop; this stops the coroutine in startTimerLogic
+        // isTimerEnabled = false; // Removed
+
+        if (timeStarted != 0L) { // Check if the timer was actually running for this segment
+            val finalLapDuration = System.currentTimeMillis() - timeStarted
+            timeRun += finalLapDuration // Add the duration of the just-completed segment to the total
+            timeStarted = 0L // Reset timeStarted to indicate the segment has ended
+        }
     }
 
     /**
@@ -180,23 +179,24 @@ class TrackingService : LifecycleService() {
             val pauseIntent = Intent(this, TrackingService::class.java).apply {
                 action = ACTION_PAUSE_SERVICE
             }
-            PendingIntent.getService(this, 1, pauseIntent, FLAG_UPDATE_CURRENT)
+            PendingIntent.getService(this, 1, pauseIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
         } else {
             val resumeIntent = Intent(this, TrackingService::class.java).apply {
                 action = ACTION_START_OR_RESUME_SERVICE
             }
-            PendingIntent.getService(this, 2, resumeIntent, FLAG_UPDATE_CURRENT)
+            PendingIntent.getService(this, 2, resumeIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
         }
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
-        curNotificationBuilder.javaClass.getDeclaredField("mActions").apply {
-            isAccessible = true
-            set(curNotificationBuilder, ArrayList<NotificationCompat.Action>())
-        }
+        // The reflection code was here and is now removed.
+        // curNotificationBuilder.javaClass.getDeclaredField("mActions").apply {
+        //     isAccessible = true
+        //     set(curNotificationBuilder, ArrayList<NotificationCompat.Action>())
+        // }
 
         if (!serviceKilled){
-            curNotificationBuilder = baseNotificationBuilder
-                .addAction(R.drawable.round_pause_24, notificationActionText, pendingIntent)
+            curNotificationBuilder.clearActions() // Clear previous actions from the existing curNotificationBuilder
+            curNotificationBuilder.addAction(R.drawable.round_pause_24, notificationActionText, pendingIntent) // Add the new action to the existing curNotificationBuilder
             notificationManager.notify(NOTIFICATION_ID, curNotificationBuilder.build())
         }
 
@@ -207,7 +207,6 @@ class TrackingService : LifecycleService() {
      * Enables/disables location updates based on the tracking state.
      * @param isTracking Whether to request or remove location updates.
      */
-    @RequiresApi(Build.VERSION_CODES.Q)
     @SuppressLint("MissingPermission")
     private fun updateLocationTracking(isTracking: Boolean) {
         if (isTracking) {
@@ -275,9 +274,8 @@ class TrackingService : LifecycleService() {
      * Starts the foreground service and initializes notification updates.
      */
     private fun startForegroundService() {
-        addEmptyPolyline()
-        startTimer()
-        isTracking.postValue(true)
+        // addEmptyPolyline() // Removed, called by startTimerLogic now
+        isTracking.postValue(true) // Signal tracking active
 
         val notificationManager = getSystemService(NOTIFICATION_SERVICE)
                 as NotificationManager
@@ -293,6 +291,7 @@ class TrackingService : LifecycleService() {
                 notificationManager.notify(NOTIFICATION_ID, notification.build())
             }
         })
+        startTimerLogic() // Call the refactored timer logic function
     }
 
 
