@@ -10,13 +10,16 @@ import pub.devrel.easypermissions.EasyPermissions
 import kotlin.math.round
 
 object TrackingUtility{
-    @RequiresApi(Build.VERSION_CODES.Q)
-    fun hasLocationPermissions(context: Context) =
-        EasyPermissions.hasPermissions(
-            context, Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+    fun hasLocationPermissions(context: Context): Boolean {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+        return EasyPermissions.hasPermissions(context, *permissions.toTypedArray())
+    }
 
     fun calculatePolylineLength(polyline: Polyline): Float{
         var distance = 0f
